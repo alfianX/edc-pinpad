@@ -165,6 +165,18 @@ func setupRouter(l *slog.Logger, h *delivery.PinpadHandler) *gin.Engine {
 			h.HandleTransfer(c)
 		})
 
+		a.POST("/get-data-ktp", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleGetDataKTP(c)
+		})
+
+		a.POST("/face-recognize", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleFaceRecognize(c)
+		})
+
+		a.POST("/re-issue-pin", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleReissuePin(c)
+		})
+
 		// Endpoint WebSocket untuk EDC fisik (sudah disesuaikan 1 TID 10 EDC ya)
 		wsGroup := a.Group("/ws")
 		wsGroup.Use(middleware.HMACAuth()) // Middleware untuk otentikasi HMAC
@@ -193,6 +205,18 @@ func setupRouter(l *slog.Logger, h *delivery.PinpadHandler) *gin.Engine {
 
 		r.POST("/transfer", middleware.GatewayAuth(), func(c *gin.Context) {
 			h.HandleTransfer(c)
+		})
+
+		r.POST("/get-data-ktp", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleGetDataKTP(c)
+		})
+
+		r.POST("/face-recognize", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleFaceRecognize(c)
+		})
+
+		r.POST("/re-issue-pin", middleware.GatewayAuth(), func(c *gin.Context) {
+			h.HandleReissuePin(c)
 		})
 
 		// Endpoint WebSocket untuk EDC fisik (sudah disesuaikan 1 TID 10 EDC ya)

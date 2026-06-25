@@ -11,19 +11,21 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 )
 
 type PinpadUsecase struct {
-	db     *gorm.DB
-	ws     *infrastructure.WSManager
-	logger *slog.Logger
+	db              *gorm.DB
+	ws              *infrastructure.WSManager
+	logger          *slog.Logger
+	pendingRequests sync.Map
 }
 
 func NewPinpadUsecase(db *gorm.DB, ws *infrastructure.WSManager, l *slog.Logger) *PinpadUsecase {
-	return &PinpadUsecase{db, ws, l}
+	return &PinpadUsecase{db: db, ws: ws, logger: l}
 }
 
 func (u *PinpadUsecase) ProcessPIN(req model.PinReq) error {
@@ -46,6 +48,118 @@ func (u *PinpadUsecase) ProcessPIN(req model.PinReq) error {
 		return err.Error
 	}
 	return u.ws.SendJSON(req.CardAcceptorTerminalId, req)
+}
+
+func (u *PinpadUsecase) ProcessData(req model.PinReq) (map[string]interface{}, error) {
+	tx := model.Transaction{
+		TransactionId:          req.TransactionId,
+		ProcessingCode:         req.ProcessingCode,
+		BranchId:               req.BranchId,
+		InitiatorId:            req.InitiatorId,
+		TransmissionDateTime:   req.TransmissionDateTime,
+		CardAcceptorTerminalIp: req.CardAcceptorTerminalIp,
+		CardAcceptorTerminalId: req.CardAcceptorTerminalId,
+		SourceAccountNumber:    req.SourceAccountNumber,
+		SourceAccountName:      req.SourceAccountName,
+		Status:                 "WAITING_EDC",
+	}
+	err := u.db.Create(&tx)
+	if err.Error != nil {
+		u.logger.Error("Failed to create transaction record", slog.String("tx", req.TransactionId), slog.Any("error", err.Error))
+		return nil, err.Error
+	}
+
+	ch := make(chan map[string]interface{}, 1)
+	u.pendingRequests.Store(req.TransactionId, ch)
+	defer u.pendingRequests.Delete(req.TransactionId)
+
+	if err := u.ws.SendJSON(req.CardAcceptorTerminalId, req); err != nil {
+		return nil, err
+	}
+
+	select {
+	case edcData := <-ch:
+		u.logger.Info("Resumed Process Get Data from EDC response", slog.String("tx", req.TransactionId))
+
+		// --- LOGIC DARI ProcessEDCResponse SEBELUMNYA DIPINDAH KESINI ---
+
+		// Validasi MTI & Procode
+		if edcData["mti"] != "0600" || edcData["processingCode"] != "950000" {
+			u.ws.SendJSON(req.CardAcceptorTerminalId, map[string]interface{}{"transactionId": req.TransactionId, "responseCode": "05", "responseMessage": "Invalid MTI/Procode"})
+			return nil, errors.New("invalid MTI or Procode from EDC")
+		}
+
+		// Update DB ke COMPLETED
+		u.db.Model(&model.Transaction{}).Where("transaction_id = ?", tx.TransactionId).Updates(map[string]interface{}{
+			"status": "COMPLETED",
+			// ... update field response host lainnya ...
+		})
+
+		// Bales ke depan (Frontend/HTTP)
+		return edcData, nil
+
+	case <-time.After(120 * time.Second): // Timeout 120 detik
+		// Update DB jika timeout
+		u.db.Model(&model.Transaction{}).Where("transaction_id = ?", tx.TransactionId).Update("status", "TIMEOUT")
+		u.logger.Error("Timeout waiting for EDC response", slog.String("tx", req.TransactionId))
+		return nil, errors.New("edc timeout")
+	}
+}
+
+func (u *PinpadUsecase) ProcessFace(req model.PinReq) (map[string]interface{}, error) {
+	tx := model.Transaction{
+		TransactionId:          req.TransactionId,
+		ProcessingCode:         req.ProcessingCode,
+		BranchId:               req.BranchId,
+		InitiatorId:            req.InitiatorId,
+		TransmissionDateTime:   req.TransmissionDateTime,
+		CardAcceptorTerminalIp: req.CardAcceptorTerminalIp,
+		CardAcceptorTerminalId: req.CardAcceptorTerminalId,
+		SourceAccountNumber:    req.SourceAccountNumber,
+		SourceAccountName:      req.SourceAccountName,
+		Status:                 "WAITING_EDC",
+	}
+	err := u.db.Create(&tx)
+	if err.Error != nil {
+		u.logger.Error("Failed to create transaction record", slog.String("tx", req.TransactionId), slog.Any("error", err.Error))
+		return nil, err.Error
+	}
+
+	ch := make(chan map[string]interface{}, 1)
+	u.pendingRequests.Store(req.TransactionId, ch)
+	defer u.pendingRequests.Delete(req.TransactionId)
+
+	if err := u.ws.SendJSON(req.CardAcceptorTerminalId, req); err != nil {
+		return nil, err
+	}
+
+	select {
+	case edcData := <-ch:
+		u.logger.Info("Resumed Process Face from EDC response", slog.String("tx", req.TransactionId))
+
+		// --- LOGIC DARI ProcessEDCResponse SEBELUMNYA DIPINDAH KESINI ---
+
+		// Validasi MTI & Procode
+		if edcData["mti"] != "0600" || edcData["processingCode"] != "960000" {
+			u.ws.SendJSON(req.CardAcceptorTerminalId, map[string]interface{}{"transactionId": req.TransactionId, "responseCode": "05", "responseMessage": "Invalid MTI/Procode"})
+			return nil, errors.New("invalid MTI or Procode from EDC")
+		}
+
+		// Update DB ke COMPLETED
+		u.db.Model(&model.Transaction{}).Where("transaction_id = ?", tx.TransactionId).Updates(map[string]interface{}{
+			"status": "COMPLETED",
+			// ... update field response host lainnya ...
+		})
+
+		// Bales ke depan (Frontend/HTTP)
+		return edcData, nil
+
+	case <-time.After(120 * time.Second): // Timeout 120 detik
+		// Update DB jika timeout
+		u.db.Model(&model.Transaction{}).Where("transaction_id = ?", tx.TransactionId).Update("status", "TIMEOUT")
+		u.logger.Error("Timeout waiting for EDC response", slog.String("tx", req.TransactionId))
+		return nil, errors.New("edc timeout")
+	}
 }
 
 func (u *PinpadUsecase) ProcessPenarikanTunai(req model.PenarikanTunaiReq) error {
@@ -108,6 +222,15 @@ func (u *PinpadUsecase) ProcessEDCResponse(tid string, data map[string]interface
 		u.logger.Error("Invalid or missing 'transactionId' in EDC response", slog.String("tid", tid))
 		return
 	}
+
+	ch, exists := u.pendingRequests.Load(txID)
+	if exists {
+		// Jika ada, lempar data mentah dari EDC ke channel tersebut.
+		// Proses validasi dan routing host akan dilanjutkan oleh fungsi yang menunggu.
+		ch.(chan map[string]interface{}) <- data
+		return
+	}
+
 	mti, ok := data["mti"].(string)
 	if !ok {
 		u.logger.Error("Invalid or missing 'mti' in EDC response", slog.String("tx", txID))
@@ -149,6 +272,13 @@ func (u *PinpadUsecase) ProcessEDCResponse(tid string, data map[string]interface
 		}
 	case mti == "0600" && procode == "940000":
 		u.logger.Info("Processing PIN change response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+	case mti == "0600" && procode == "970000":
+		u.logger.Info("Processing Re-issue PIN response", slog.String("tx", txID))
 		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
 			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
 			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
@@ -346,6 +476,8 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 		endpointPath = "/api/pin/create"
 	case mti == "0600" && procode == "940000":
 		endpointPath = "/api/pin/change"
+	case mti == "0600" && procode == "970000":
+		endpointPath = "/api/pin/re_issue"
 	case mti == "0100" && procode == "810000":
 		endpointPath = "/api/pin/verify"
 	case mti == "0100" && procode == "010000":

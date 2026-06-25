@@ -27,7 +27,7 @@ func (h *PinpadHandler) HandlePinCreate(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Received PIN Create Request", slog.String("transactionId", req.TransactionId))
+	h.logger.Info("Received PIN Create Request", slog.Any("req", req))
 
 	if err := h.uc.ProcessPIN(req); err != nil {
 		h.logger.Error("Failed to process PIN create", slog.String("error", err.Error()))
@@ -47,7 +47,7 @@ func (h *PinpadHandler) HandlePinChange(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Received PIN Change Request", slog.String("transactionId", req.TransactionId))
+	h.logger.Info("Received PIN Change Request", slog.Any("req", req))
 
 	if err := h.uc.ProcessPIN(req); err != nil {
 		h.logger.Error("Failed to process PIN change", slog.String("error", err.Error()))
@@ -67,7 +67,7 @@ func (h *PinpadHandler) HandlePinVerify(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Received PIN Verify Request", slog.String("transactionId", req.TransactionId))
+	h.logger.Info("Received PIN Verify Request", slog.Any("req", req))
 
 	if err := h.uc.ProcessPIN(req); err != nil {
 		h.logger.Error("Failed to process PIN verify", slog.String("error", err.Error()))
@@ -87,7 +87,7 @@ func (h *PinpadHandler) HandlePenarikanTunai(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Received Penarikan Tunai Request", slog.String("transactionId", req.TransactionId))
+	h.logger.Info("Received Penarikan Tunai Request", slog.Any("req", req))
 
 	if err := h.uc.ProcessPenarikanTunai(req); err != nil {
 		h.logger.Error("Failed to process Penarikan Tunai", slog.String("error", err.Error()))
@@ -107,7 +107,7 @@ func (h *PinpadHandler) HandleTransfer(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Received Transfer Request", slog.String("transactionId", req.TransactionId))
+	h.logger.Info("Received Transfer Request", slog.Any("req", req))
 
 	if err := h.uc.ProcessTransfer(req); err != nil {
 		h.logger.Error("Failed to process Transfer", slog.String("error", err.Error()))
@@ -116,6 +116,76 @@ func (h *PinpadHandler) HandleTransfer(c *gin.Context) {
 	}
 
 	h.logger.Info("Successfully processed Transfer", slog.String("transactionId", req.TransactionId))
+
+	c.JSON(http.StatusOK, gin.H{"responseCode": "00", "status": "PINPAD_READY"})
+}
+
+func (h *PinpadHandler) HandleGetDataKTP(c *gin.Context) {
+	var req model.PinReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+
+	h.logger.Info("Received Get Data eKTP Request", slog.Any("req", req))
+
+	resp, err := h.uc.ProcessData(req)
+	if err != nil {
+		h.logger.Error("Failed to process Get Data eKTP", slog.String("error", err.Error()))
+		if err.Error() == "edc timeout" {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "Timeout waiting for EDC response"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.logger.Info("Successfully processed Get Data eKTP", slog.Any("resp", resp))
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *PinpadHandler) HandleFaceRecognize(c *gin.Context) {
+	var req model.PinReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+
+	h.logger.Info("Received Face Recognize Request", slog.Any("req", req))
+
+	resp, err := h.uc.ProcessFace(req)
+	if err != nil {
+		h.logger.Error("Failed to process Face Recognize", slog.String("error", err.Error()))
+		if err.Error() == "edc timeout" {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "Timeout waiting for EDC response"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.logger.Info("Successfully processed Face Recognize", slog.Any("resp", resp))
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *PinpadHandler) HandleReissuePin(c *gin.Context) {
+	var req model.PinReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+
+	h.logger.Info("Received Re-Issue PIN Request", slog.Any("req", req))
+
+	if err := h.uc.ProcessPIN(req); err != nil {
+		h.logger.Error("Failed to process Re-Issue PIN", slog.String("error", err.Error()))
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.logger.Info("Successfully processed Re-Issue PIN", slog.String("transactionId", req.TransactionId))
 
 	c.JSON(http.StatusOK, gin.H{"responseCode": "00", "status": "PINPAD_READY"})
 }

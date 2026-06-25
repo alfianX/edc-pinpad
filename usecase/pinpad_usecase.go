@@ -1,0 +1,389 @@
+package usecase
+
+import (
+	"bytes"
+	"edc-pinpad/config"
+	"edc-pinpad/infrastructure"
+	"edc-pinpad/model"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type PinpadUsecase struct {
+	db     *gorm.DB
+	ws     *infrastructure.WSManager
+	logger *slog.Logger
+}
+
+func NewPinpadUsecase(db *gorm.DB, ws *infrastructure.WSManager, l *slog.Logger) *PinpadUsecase {
+	return &PinpadUsecase{db, ws, l}
+}
+
+func (u *PinpadUsecase) ProcessPIN(req model.PinReq) error {
+	tx := model.Transaction{
+		TransactionId:          req.TransactionId,
+		PrimaryAccountNumber:   req.PrimaryAccountNumber,
+		ProcessingCode:         req.ProcessingCode,
+		BranchId:               req.BranchId,
+		InitiatorId:            req.InitiatorId,
+		TransmissionDateTime:   req.TransmissionDateTime,
+		CardAcceptorTerminalIp: req.CardAcceptorTerminalIp,
+		CardAcceptorTerminalId: req.CardAcceptorTerminalId,
+		SourceAccountNumber:    req.SourceAccountNumber,
+		SourceAccountName:      req.SourceAccountName,
+		Status:                 "WAITING_EDC",
+	}
+	err := u.db.Create(&tx)
+	if err.Error != nil {
+		u.logger.Error("Failed to create transaction record", slog.String("tx", req.TransactionId), slog.Any("error", err.Error))
+		return err.Error
+	}
+	return u.ws.SendJSON(req.CardAcceptorTerminalId, req)
+}
+
+func (u *PinpadUsecase) ProcessPenarikanTunai(req model.PenarikanTunaiReq) error {
+	tx := model.Transaction{
+		TransactionId:          req.TransactionId,
+		PrimaryAccountNumber:   req.PrimaryAccountNumber,
+		ProcessingCode:         req.ProcessingCode,
+		BranchId:               req.BranchId,
+		InitiatorId:            req.InitiatorId,
+		TransmissionDateTime:   req.TransmissionDateTime,
+		CardAcceptorTerminalIp: req.CardAcceptorTerminalIp,
+		CardAcceptorTerminalId: req.CardAcceptorTerminalId,
+		SourceAccountNumber:    req.SourceAccountNumber,
+		SourceAccountName:      req.SourceAccountName,
+		TransactionFee:         req.TransactionFee,
+		TransactionAmount:      req.TransactionAmount,
+		Currency:               req.Currency,
+		Status:                 "WAITING_EDC",
+	}
+	err := u.db.Create(&tx)
+	if err.Error != nil {
+		u.logger.Error("Failed to create transaction record", slog.String("tx", req.TransactionId), slog.Any("error", err.Error))
+		return err.Error
+	}
+	return u.ws.SendJSON(req.CardAcceptorTerminalId, req)
+}
+
+func (u *PinpadUsecase) ProcessTransfer(req model.TransferReq) error {
+	tx := model.Transaction{
+		TransactionId:            req.TransactionId,
+		PrimaryAccountNumber:     req.PrimaryAccountNumber,
+		ProcessingCode:           req.ProcessingCode,
+		BranchId:                 req.BranchId,
+		InitiatorId:              req.InitiatorId,
+		TransmissionDateTime:     req.TransmissionDateTime,
+		CardAcceptorTerminalIp:   req.CardAcceptorTerminalIp,
+		CardAcceptorTerminalId:   req.CardAcceptorTerminalId,
+		SourceAccountNumber:      req.SourceAccountNumber,
+		SourceAccountName:        req.SourceAccountName,
+		DestinationAccountNumber: req.DestinationAccountNumber,
+		DestinationAccountName:   req.DestinationAccountName,
+		TransactionFee:           req.TransactionFee,
+		TransactionAmount:        req.TransactionAmount,
+		Currency:                 req.Currency,
+		Status:                   "WAITING_EDC",
+	}
+	err := u.db.Create(&tx)
+	if err.Error != nil {
+		u.logger.Error("Failed to create transaction record", slog.String("tx", req.TransactionId), slog.Any("error", err.Error))
+		return err.Error
+	}
+	return u.ws.SendJSON(req.CardAcceptorTerminalId, req)
+}
+
+func (u *PinpadUsecase) ProcessEDCResponse(tid string, data map[string]interface{}) {
+	u.logger.Info("Received message from EDC", slog.String("tid", tid), slog.Any("data", data))
+
+	txID, ok := data["transactionId"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'transactionId' in EDC response", slog.String("tid", tid))
+		return
+	}
+	mti, ok := data["mti"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'mti' in EDC response", slog.String("tx", txID))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Invalid MTI in response"})
+		return
+	}
+	procode, ok := data["processingCode"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'processingCode' in EDC response", slog.String("tx", txID))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Invalid Processing Code in response"})
+	}
+
+	var dataTrx model.Transaction
+	err := u.db.Model(&model.Transaction{}).Where("transaction_id = ?", txID).First(&dataTrx).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			u.logger.Warn("Transaction not found for EDC response", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Transaction not found"})
+		} else {
+			u.logger.Error("Database error while fetching transaction", slog.String("tx", txID), slog.Any("error", err.Error))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Internal server error"})
+		}
+		return
+	}
+
+	if dataTrx.Status != "WAITING_EDC" {
+		u.logger.Warn("Received EDC response for transaction not in WAITING_EDC status", slog.String("tx", txID), slog.String("currentStatus", dataTrx.Status))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Invalid transaction status"})
+		return
+	}
+
+	switch {
+	case mti == "0600" && procode == "930000":
+		u.logger.Info("Processing PIN create response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+	case mti == "0600" && procode == "940000":
+		u.logger.Info("Processing PIN change response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+	case mti == "0100" && procode == "810000":
+		u.logger.Info("Processing PIN verify response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+	case mti == "0100" && procode == "010000":
+		u.logger.Info("Processing Penarikan Tunai response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+
+		if data["sourceAccountNumber"] != dataTrx.SourceAccountNumber {
+			u.logger.Warn("Source account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Source account number mismatch"})
+			return
+		}
+
+		if data["transactionFee"] != dataTrx.TransactionFee {
+			u.logger.Warn("Transaction fee mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Transaction fee mismatch"})
+			return
+		}
+
+		if data["transactionAmount"] != dataTrx.TransactionAmount {
+			u.logger.Warn("Transaction amount mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Transaction amount mismatch"})
+			return
+		}
+
+		if data["currency"] != dataTrx.Currency {
+			u.logger.Warn("Currency mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Currency mismatch"})
+			return
+		}
+	case mti == "0100" && procode == "400000":
+		u.logger.Info("Processing Transfer response", slog.String("tx", txID))
+		if data["primaryAccountNumber"] != dataTrx.PrimaryAccountNumber {
+			u.logger.Warn("Primary account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Primary account number mismatch"})
+			return
+		}
+
+		if data["sourceAccountNumber"] != dataTrx.SourceAccountNumber {
+			u.logger.Warn("Source account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Source account number mismatch"})
+			return
+		}
+
+		if data["sourceAccountName"] != dataTrx.SourceAccountName {
+			u.logger.Warn("Source account name mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Source account name mismatch"})
+			return
+		}
+
+		if data["destinationAccountNumber"] != dataTrx.DestinationAccountNumber {
+			u.logger.Warn("Destination account number mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Destination account number mismatch"})
+			return
+		}
+
+		if data["destinationAccountName"] != dataTrx.DestinationAccountName {
+			u.logger.Warn("Destination account name mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Destination account name mismatch"})
+			return
+		}
+
+		if data["transactionFee"] != dataTrx.TransactionFee {
+			u.logger.Warn("Transaction fee mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Transaction fee mismatch"})
+			return
+		}
+
+		if data["transactionAmount"] != dataTrx.TransactionAmount {
+			u.logger.Warn("Transaction amount mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Transaction amount mismatch"})
+			return
+		}
+
+		if data["currency"] != dataTrx.Currency {
+			u.logger.Warn("Currency mismatch", slog.String("tx", txID))
+			_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Currency mismatch"})
+			return
+		}
+	default:
+		u.logger.Error("Unsupported transaction routing", slog.String("mti", mti), slog.String("procode", procode))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Unsupported transaction routing"})
+		return
+	}
+
+	errUpdt := u.db.Model(&model.Transaction{}).Where("transaction_id = ?", dataTrx.TransactionId).Updates(map[string]interface{}{
+		"mti":                       data["mti"],
+		"system_trace_audit_number": data["systemTraceAuditNumber"],
+		"card_acceptor_merchant_id": data["cardAcceptorMerchantId"],
+		"status":                    "FORWARDING_TO_HOST",
+	}).Error
+	if errUpdt != nil {
+		u.logger.Error("Failed to update transaction record", slog.String("tx", txID), slog.Any("error", errUpdt))
+		return
+	}
+
+	u.logger.Info("Forwarding transaction to host", slog.String("tx", txID))
+	hostResp, err := u.callExternalHost(data)
+	if err != nil {
+		errUpdt := u.db.Model(&model.Transaction{}).Where("transaction_id = ?", dataTrx.TransactionId).Update("status", "HOST_UNREACHABLE").Error
+		if errUpdt != nil {
+			u.logger.Error("Failed to update transaction status to HOST_UNREACHABLE", slog.String("tx", txID), slog.Any("error", errUpdt))
+		}
+		u.logger.Error("Host unreachable", slog.String("tx", txID))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"transactionId": txID, "responseCode": "05", "responseMessage": "Host unreachable"})
+		return
+	}
+
+	u.db.Model(&model.Transaction{}).Where("transaction_id = ?", txID).Updates(map[string]interface{}{
+		"response_code":              hostResp["responseCode"],
+		"response_message":           hostResp["responseMessage"],
+		"approval_code":              hostResp["approvalCode"],
+		"retrieval_reference_number": hostResp["retrievalReferenceNumber"],
+		"status":                     "COMPLETED",
+	})
+
+	u.logger.Info("Transaction completed and response to EDC", slog.String("tx", txID))
+	_ = u.ws.SendJSON(tid, hostResp)
+}
+
+func (u *PinpadUsecase) ProcessEDCLogon(tid string, data map[string]interface{}) {
+	u.logger.Info("Received logon from EDC", slog.String("tid", tid), slog.Any("data", data))
+
+	_, ok := data["processingCode"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'processingCode' from EDC ", slog.String("tid", tid))
+		return
+	}
+
+	_, ok = data["transmissionDateTime"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'transmissionDateTime' from EDC ", slog.String("tid", tid))
+		return
+	}
+
+	_, ok = data["transmissionDateTime"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'transmissionDateTime' from EDC ", slog.String("tid", tid))
+		return
+	}
+
+	_, ok = data["cardAcceptorMerchantId"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'cardAcceptorMerchantId' from EDC ", slog.String("tid", tid))
+		return
+	}
+
+	_, ok = data["cardAcceptorTerminalId"].(string)
+	if !ok {
+		u.logger.Error("Invalid or missing 'cardAcceptorTerminalId' from EDC ", slog.String("tid", tid))
+		return
+	}
+
+	u.logger.Info("Forwarding logon to host", slog.String("tid", tid))
+	hostResp, err := u.callExternalHost(data)
+	if err != nil {
+		u.logger.Error("Host unreachable", slog.String("tid", tid))
+		_ = u.ws.SendJSON(tid, map[string]interface{}{"responseCode": "05", "responseMessage": "Host unreachable"})
+		return
+	}
+
+	u.logger.Info("Logon completed and response to EDC", slog.String("tid", tid))
+	_ = u.ws.SendJSON(tid, hostResp)
+}
+
+func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[string]interface{}, error) {
+	// 1. Ekstrak MTI dan Processing Code dengan aman (type assertion)
+	mti, ok := payload["mti"].(string)
+	if !ok {
+		return nil, errors.New("invalid or missing 'mti' in payload")
+	}
+
+	procode, ok := payload["processingCode"].(string)
+	if !ok {
+		return nil, errors.New("invalid or missing 'processingCode' in payload")
+	}
+
+	// 2. Tentukan Endpoint Path berdasarkan MTI & Procode
+	var endpointPath string
+	switch {
+	case mti == "0600" && procode == "930000":
+		endpointPath = "/api/pin/create"
+	case mti == "0600" && procode == "940000":
+		endpointPath = "/api/pin/change"
+	case mti == "0100" && procode == "810000":
+		endpointPath = "/api/pin/verify"
+	case mti == "0100" && procode == "010000":
+		endpointPath = "/api/cash/withdrawal"
+	case mti == "0100" && procode == "400000":
+		endpointPath = "/api/transfer/intrabank"
+	case mti == "0800" && procode == "9B0000":
+		endpointPath = "/api/logon"
+	default:
+		// Tolak request di awal jika transaksi tidak didukung
+		return nil, fmt.Errorf("unsupported transaction routing for MTI %s and Procode %s", mti, procode)
+	}
+
+	// 3. Gabungkan Base URL dengan Endpoint Path
+	config.GlobalConfig.Mu.RLock()
+	baseURL := config.GlobalConfig.HostURL
+	config.GlobalConfig.Mu.RUnlock()
+	// TrimSuffix memastikan tidak ada double slash (//) jika HOST_URL diakhiri dengan slash
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	fullURL := baseURL + endpointPath
+
+	// 4. Proses Request (Existing Logic)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(fullURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}

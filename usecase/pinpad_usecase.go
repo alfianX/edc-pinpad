@@ -2,14 +2,17 @@ package usecase
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha512"
 	"edc-pinpad/config"
 	"edc-pinpad/infrastructure"
 	"edc-pinpad/model"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -453,43 +456,44 @@ func (u *PinpadUsecase) ProcessEDCLogon(tid string, data map[string]interface{})
 		return
 	}
 
-	u.logger.Info("Logon completed and response to EDC", slog.String("tid", tid))
+	u.logger.Info("Logon completed and response to EDC", slog.String("tid", tid), slog.Any("data", hostResp))
 	_ = u.ws.SendJSON(tid, hostResp)
 }
 
 func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[string]interface{}, error) {
-	// 1. Ekstrak MTI dan Processing Code dengan aman (type assertion)
-	mti, ok := payload["mti"].(string)
+
+	tid, ok := payload["cardAcceptorTerminalId"].(string)
 	if !ok {
-		return nil, errors.New("invalid or missing 'mti' in payload")
+		return nil, errors.New("invalid or missing 'tid' in payload")
 	}
 
-	procode, ok := payload["processingCode"].(string)
-	if !ok {
-		return nil, errors.New("invalid or missing 'processingCode' in payload")
-	}
+	// procode, ok := payload["processingCode"].(string)
+	// if !ok {
+	// 	return nil, errors.New("invalid or missing 'processingCode' in payload")
+	// }
 
 	// 2. Tentukan Endpoint Path berdasarkan MTI & Procode
 	var endpointPath string
-	switch {
-	case mti == "0600" && procode == "930000":
-		endpointPath = "/api/pin/create"
-	case mti == "0600" && procode == "940000":
-		endpointPath = "/api/pin/change"
-	case mti == "0600" && procode == "970000":
-		endpointPath = "/api/pin/re_issue"
-	case mti == "0100" && procode == "810000":
-		endpointPath = "/api/pin/verify"
-	case mti == "0100" && procode == "010000":
-		endpointPath = "/api/cash/withdrawal"
-	case mti == "0100" && procode == "400000":
-		endpointPath = "/api/transfer/intrabank"
-	case mti == "0800" && procode == "9B0000":
-		endpointPath = "/api/logon"
-	default:
-		// Tolak request di awal jika transaksi tidak didukung
-		return nil, fmt.Errorf("unsupported transaction routing for MTI %s and Procode %s", mti, procode)
-	}
+	endpointPath = "/api/v1"
+	// switch {
+	// case mti == "0600" && procode == "930000":
+	// 	endpointPath = "/api/pin/create"
+	// case mti == "0600" && procode == "940000":
+	// 	endpointPath = "/api/pin/change"
+	// case mti == "0600" && procode == "970000":
+	// 	endpointPath = "/api/pin/re_issue"
+	// case mti == "0100" && procode == "810000":
+	// 	endpointPath = "/api/pin/verify"
+	// case mti == "0100" && procode == "010000":
+	// 	endpointPath = "/api/cash/withdrawal"
+	// case mti == "0100" && procode == "400000":
+	// 	endpointPath = "/api/transfer/intrabank"
+	// case mti == "0800" && procode == "9B0000":
+	// 	endpointPath = "/api/logon"
+	// default:
+	// 	// Tolak request di awal jika transaksi tidak didukung
+	// 	return nil, fmt.Errorf("unsupported transaction routing for MTI %s and Procode %s", mti, procode)
+	// }
 
 	// 3. Gabungkan Base URL dengan Endpoint Path
 	config.GlobalConfig.Mu.RLock()
@@ -505,8 +509,25 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 		return nil, err
 	}
 
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	// 3. Generate HMAC-SHA512 Signature (Sesuai logic di Middleware Master)
+	mac := hmac.New(sha512.New, []byte(config.GlobalConfig.ClientSecret))
+	mac.Write([]byte(tid + timestamp))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	req, err := http.NewRequest("POST", fullURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-TIMESTAMP", timestamp)
+	req.Header.Set("x-partner-id", config.GlobalConfig.PartnerID)
+	req.Header.Set("x-signature", signature)
+
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Post(fullURL, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

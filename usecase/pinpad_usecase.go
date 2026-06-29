@@ -12,7 +12,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -509,7 +508,17 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 		return nil, err
 	}
 
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		// Fallback jika OS tidak punya data timezone (jarang terjadi)
+		loc = time.FixedZone("WIB", 7*3600)
+	}
+
+	// 2. Ambil waktu saat ini dan paksa masuk ke zona waktu tersebut
+	now := time.Now().In(loc)
+
+	// 3. Format menggunakan RFC3339
+	timestamp := now.Format(time.RFC3339)
 
 	// 3. Generate HMAC-SHA512 Signature (Sesuai logic di Middleware Master)
 	mac := hmac.New(sha512.New, []byte(config.GlobalConfig.ClientSecret))
@@ -522,9 +531,12 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-TIMESTAMP", timestamp)
+	req.Header.Set("x-timestamp", timestamp)
 	req.Header.Set("x-partner-id", config.GlobalConfig.PartnerID)
 	req.Header.Set("x-signature", signature)
+
+	// u.logger.Info("Header ", slog.String("timestamp", timestamp), slog.String("partner id", config.GlobalConfig.PartnerID), slog.String("signature", signature))
+	u.logger.Info("Request", slog.Any("Header", req.Header))
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)

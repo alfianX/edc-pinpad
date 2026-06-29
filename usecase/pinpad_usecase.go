@@ -536,7 +536,7 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 	req.Header.Set("x-signature", signature)
 
 	// u.logger.Info("Header ", slog.String("timestamp", timestamp), slog.String("partner id", config.GlobalConfig.PartnerID), slog.String("signature", signature))
-	u.logger.Info("Request", slog.Any("Header", req.Header))
+	u.logger.Info("Request HTTP", slog.Any("Header", req.Header))
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)

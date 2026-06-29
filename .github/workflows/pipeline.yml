@@ -1,0 +1,24 @@
+name: Backend EDC Pinpad Gateway
+
+# 1. Kapan proses ini berjalan?
+on:
+  push:
+    branches:
+      - main # Jalan setiap ada push ke branch main
+
+jobs:
+  # 2. Tugas pertama: Test kode Golang
+  test-kode:
+    runs-on: ubuntu-latest # Menggunakan server virtual Ubuntu dari GitHub
+    
+    steps:
+      - name: Checkout Kode
+        uses: actions/checkout@v4 # Mengambil kodenya dari repository
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25' # Setup Golang di server virtual
+
+      - name: Jalankan Unit Test
+        run: go test -v ./... # Perintah standar untuk test Golang

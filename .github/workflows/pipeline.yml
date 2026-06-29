@@ -22,3 +22,16 @@ jobs:
 
       - name: Jalankan Unit Test
         run: go test -v ./... # Perintah standar untuk test Golang
+
+  # --- TAMBAHAN BARU UNTUK CD ---
+  build-docker:
+    needs: test-kode # WAJIB: Job ini hanya jalan kalau 'test-kode' sukses
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Kode
+        uses: actions/checkout@v5
+        
+      # Ini akan melakukan simulasi build Docker image di server GitHub
+      - name: Build Docker Image
+        run: docker build -t backend-app:latest .

@@ -4,7 +4,7 @@ name: Backend EDC Pinpad Gateway
 on:
   push:
     branches:
-      - main # Jalan setiap ada push ke branch main
+      - master # Jalan setiap ada push ke branch main
 
 jobs:
   # 2. Tugas pertama: Test kode Golang

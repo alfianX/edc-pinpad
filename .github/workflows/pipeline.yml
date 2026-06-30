@@ -52,15 +52,11 @@ jobs:
 
         run: go test -v ./... # Perintah standar untuk test Golang
 
-  # --- TAMBAHAN BARU UNTUK CD ---
-  build-docker:
-    needs: test-kode # WAJIB: Job ini hanya jalan kalau 'test-kode' sukses
+  # 2. CD: Suruh Render melakukan deploy JIKA test sukses
+  deploy-ke-render:
+    needs: test-kode # Wajib menunggu test-kode sukses/hijau
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Kode
-        uses: actions/checkout@v5
-        
-      # Ini akan melakukan simulasi build Docker image di server GitHub
-      - name: Build Docker Image
-        run: docker build -t backend-app:latest .
+      - name: Trigger Render Deploy Hook
+        # Mengirim sinyal ke Render untuk mulai build dan deploy
+        run: curl ${{ secrets.RENDER_DEPLOY_HOOK }}

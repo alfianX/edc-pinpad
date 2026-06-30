@@ -461,10 +461,10 @@ func (u *PinpadUsecase) ProcessEDCLogon(tid string, data map[string]interface{})
 
 func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[string]interface{}, error) {
 
-	tid, ok := payload["cardAcceptorTerminalId"].(string)
-	if !ok {
-		return nil, errors.New("invalid or missing 'tid' in payload")
-	}
+	// tid, ok := payload["cardAcceptorTerminalId"].(string)
+	// if !ok {
+	// 	return nil, errors.New("invalid or missing 'tid' in payload")
+	// }
 
 	// procode, ok := payload["processingCode"].(string)
 	// if !ok {
@@ -522,7 +522,7 @@ func (u *PinpadUsecase) callExternalHost(payload map[string]interface{}) (map[st
 
 	// 3. Generate HMAC-SHA512 Signature (Sesuai logic di Middleware Master)
 	mac := hmac.New(sha512.New, []byte(config.GlobalConfig.ClientSecret))
-	mac.Write([]byte(tid + timestamp))
+	mac.Write([]byte(config.GlobalConfig.PartnerID + timestamp))
 	signature := hex.EncodeToString(mac.Sum(nil))
 
 	req, err := http.NewRequest("POST", fullURL, bytes.NewBuffer(jsonData))

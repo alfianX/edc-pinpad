@@ -10,24 +10,6 @@ jobs:
   # 2. Tugas pertama: Test kode Golang
   test-kode:
     runs-on: ubuntu-latest # Menggunakan server virtual Ubuntu dari GitHub
-
-    # --- 1. Service MySQL ---
-    services:
-      mysql_db:
-        image: mysql:8.0 # Versi MySQL, sesuaikan jika kamu pakai versi 5.7
-        env:
-          MYSQL_ROOT_PASSWORD: rootpassword
-          MYSQL_DATABASE: namadb_test
-          MYSQL_USER: user_test
-          MYSQL_PASSWORD: password_test
-        ports:
-          - 3306:3306
-        # Menunggu MySQL benar-benar siap menerima koneksi sebelum lanjut
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
     
     steps:
       - name: Checkout Kode
@@ -42,11 +24,11 @@ jobs:
         run: |
           echo "STANDALONE_MODE=true" >> .env
           echo "LISTEN_PORT=9888" >> .env
-          echo "DB_HOST=127.0.0.1" >> .env
-          echo "DB_PORT=3306" >> .env
-          echo "DB_USER=user_test" >> .env
-          echo "DB_PASS=password_test" >> .env
-          echo "DB_NAME=namadb_test" >> .env
+          echo "DB_HOST=gateway01.ap-southeast-1.prod.aws.tidbcloud.com" >> .env
+          echo "DB_PORT=4000" >> .env
+          echo "DB_USER=48aKUawB3PKNtJQ.root" >> .env
+          echo "DB_PASS=30PyUCl81PQYl9Bz" >> .env
+          echo "DB_NAME=sys" >> .env
 
       - name: Jalankan Unit Test
 

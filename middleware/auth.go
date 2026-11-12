@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"edc-pinpad/config"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -62,18 +63,29 @@ func GatewayAuth() gin.HandlerFunc {
 		signatureReceived := c.GetHeader("x-signature")
 
 		if partnerID == "" || timestamp == "" || signatureReceived == "" {
+			slog.Warn("missing auth headers")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing auth headers"})
 			return
 		}
 
 		// Spek: stringToSign = X-PARTNER-ID+X-TIMESTAMP
-		stringToSign := partnerID + timestamp
+		stringToSign := config.GlobalConfig.PartnerID + timestamp
 
 		mac := hmac.New(sha512.New, []byte(clientSecret))
 		mac.Write([]byte(stringToSign))
 		expectedSignature := hex.EncodeToString(mac.Sum(nil))
 
+		slog.Info("Header",
+			slog.String("partner id req", partnerID),
+			slog.String("expected partner id", partnerID),
+			slog.String("timestamp", timestamp),
+			slog.String("string to sign", stringToSign),
+			slog.String("signature", signatureReceived),
+			slog.String("expected string", expectedSignature),
+		)
+
 		if !hmac.Equal([]byte(signatureReceived), []byte(expectedSignature)) {
+			slog.Warn("invalid signature")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
 			return
 		}

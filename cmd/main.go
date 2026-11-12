@@ -15,6 +15,7 @@ import (
 	"edc-pinpad/delivery"
 	"edc-pinpad/infrastructure"
 	"edc-pinpad/middleware"
+	"edc-pinpad/pkg/license"
 	"edc-pinpad/pkg/logger"
 	"edc-pinpad/usecase"
 
@@ -102,9 +103,17 @@ func main() {
 		db = infrastructure.GetDB()
 	}
 
+	err = license.InitWasmEngine()
+	if err != nil {
+		l.Error("EDC Pinpad Gateway failed to start", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	volumeSN := license.GetVolume()
+
 	ws := infrastructure.NewWSManager(l, db)
 	uc := usecase.NewPinpadUsecase(db, ws, l)
-	h := delivery.NewPinpadHandler(uc, ws, l)
+	h := delivery.NewPinpadHandler(uc, ws, volumeSN, l)
 
 	r := setupRouter(l, h)
 	// =========================================================
@@ -179,7 +188,7 @@ func setupRouter(l *slog.Logger, h *delivery.PinpadHandler) *gin.Engine {
 
 		// Endpoint WebSocket untuk EDC fisik (sudah disesuaikan 1 TID 10 EDC ya)
 		wsGroup := a.Group("/ws")
-		wsGroup.Use(middleware.HMACAuth()) // Middleware untuk otentikasi HMAC
+		wsGroup.Use( /*middleware.HMACAuth()*/ ) // Middleware untuk otentikasi HMAC
 		{
 			wsGroup.GET("/edc", func(c *gin.Context) {
 				h.HandleWS(c)

@@ -1,8 +1,10 @@
 package delivery
 
 import (
+	"edc-pinpad/config"
 	"edc-pinpad/infrastructure"
 	"edc-pinpad/model"
+	"edc-pinpad/pkg/license"
 	"edc-pinpad/usecase"
 	"log/slog"
 	"net/http"
@@ -11,13 +13,14 @@ import (
 )
 
 type PinpadHandler struct {
-	uc     *usecase.PinpadUsecase
-	ws     *infrastructure.WSManager
-	logger *slog.Logger
+	uc       *usecase.PinpadUsecase
+	ws       *infrastructure.WSManager
+	volumeSN string
+	logger   *slog.Logger
 }
 
-func NewPinpadHandler(uc *usecase.PinpadUsecase, ws *infrastructure.WSManager, logger *slog.Logger) *PinpadHandler {
-	return &PinpadHandler{uc, ws, logger}
+func NewPinpadHandler(uc *usecase.PinpadUsecase, ws *infrastructure.WSManager, volumeSN string, logger *slog.Logger) *PinpadHandler {
+	return &PinpadHandler{uc, ws, volumeSN, logger}
 }
 
 func (h *PinpadHandler) HandlePinCreate(c *gin.Context) {
@@ -205,6 +208,19 @@ func (h *PinpadHandler) HandleWS(c *gin.Context) {
 		if err := conn.ReadJSON(&msg); err != nil {
 			break
 		}
+
+		licensestatus, err := license.ValidateLicense(config.GlobalConfig.LicenseKey, h.volumeSN)
+		if err != nil {
+			h.logger.Error("validate license: ", slog.String("error", err.Error()))
+			_ = h.ws.SendJSON(tid, map[string]interface{}{"transactionId": tid, "responseCode": "L0", "responseMessage": "System License Error"})
+			return
+		}
+
+		if licensestatus != "OK" {
+			_ = h.ws.SendJSON(tid, map[string]interface{}{"transactionId": tid, "responseCode": "L1", "responseMessage": licensestatus})
+			return
+		}
+
 		mti, ok := msg["mti"].(string)
 		if !ok {
 			h.logger.Error("Invalid or missing 'mti' in EDC response", slog.String("tid", tid))

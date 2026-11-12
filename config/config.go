@@ -25,6 +25,7 @@ type AppConfig struct {
 	DbUser       string `json:"DB_USER"`
 	DbPass       string `json:"DB_PASS"`
 	DbName       string `json:"DB_NAME"`
+	LicenseKey   string `json:"LICENSE_KEY"`
 }
 
 var GlobalConfig = &AppConfig{}
@@ -90,6 +91,7 @@ func (cfg *AppConfig) LoadInitialEnv() {
 		cfg.DbUser = os.Getenv("DB_USER")
 		cfg.DbPass = os.Getenv("DB_PASS")
 		cfg.DbName = os.Getenv("DB_NAME")
+		cfg.LicenseKey = os.Getenv("LICENSE_KEY")
 	}
 }
 

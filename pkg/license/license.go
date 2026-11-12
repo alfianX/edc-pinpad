@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
@@ -34,9 +35,11 @@ func ValidateLicense(key string, volumesn string) (string, error) {
 	ctx := context.Background()
 	var stdoutBuf bytes.Buffer
 
+	currentDate := time.Now().Format("20060102")
+
 	config := wazero.NewModuleConfig().
 		WithStdout(&stdoutBuf).
-		WithArgs("license.wasm", key, volumesn)
+		WithArgs("license.wasm", key, volumesn, currentDate)
 
 	// Gunakan InstantiateModule (mengeksekusi dari cache), bukan InstantiateWithConfig
 	_, err := wazeroRuntime.InstantiateModule(ctx, compiledWasm, config)
